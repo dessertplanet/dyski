@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dyski: Score in, music out</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <section class="stage" id="stage">
+        <div id="serialStatus" class="status-pill status-overlay">Disconnected</div>
+        <div class="controls controls-overlay">
+          <button id="connectBtn" type="button">Connect</button>
+          <button id="disconnectBtn" type="button">Disconnect</button>
+          <button id="uploadBtn" type="button">Choose image</button>
+          <button id="followMouseBtn" type="button">Mouse: Off</button>
+        </div>
+        <canvas id="previewCanvas" width="512" height="512" aria-label="Uploaded image with viewfinder"></canvas>
+        <div class="slew-overlay">
+          <label for="slewSlider">Audio1 Slew</label>
+          <input id="slewSlider" type="range" min="0" max="255" value="64" />
+        </div>
+      </section>
+
+      <input id="imageInput" type="file" accept="image/*" hidden />
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
