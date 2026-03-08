@@ -153,6 +153,19 @@ body {
   padding: 0.7rem 1.4rem;
 }
 
+.empty-upload-hint {
+  position: absolute;
+  top: calc(50% + 2.6rem);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  margin: 0;
+  color: #98a6bb;
+  font-size: 0.9rem;
+  text-align: center;
+  pointer-events: none;
+}
+
 #disconnectBtn {
   display: none;
 }
@@ -264,6 +277,10 @@ button.toggle-active {
 
 .settings-panel.settings-panel-open {
   display: flex;
+}
+
+.settings-action {
+  width: 100%;
 }
 
 .settings-panel input[type="color"] {

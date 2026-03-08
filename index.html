@@ -22,9 +22,9 @@
               <div id="cameraList" class="camera-list"></div>
             </div>
           </div>
-          <button id="followMouseBtn" type="button">Mouse: Off</button>
         </div>
         <button id="emptyUploadBtn" class="empty-upload-btn" type="button">Choose image</button>
+        <p id="emptyUploadHint" class="empty-upload-hint">or drag an image onto this window</p>
         <canvas id="previewCanvas" aria-label="Uploaded image with viewfinder"></canvas>
         <div class="adjust-overlay">
           <button id="invertBtn" type="button">Invert</button>
@@ -51,6 +51,7 @@
           <div class="settings-wrapper">
             <button id="settingsBtn" type="button">Settings</button>
             <div id="settingsPanel" class="settings-panel">
+              <button id="followMouseBtn" class="settings-action" type="button">Mouse Mode: Off</button>
               <div class="color-control">
                 <label for="slewSlider">Audio1 Slew</label>
                 <input id="slewSlider" type="range" min="0" max="255" value="64" />

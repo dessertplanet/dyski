@@ -7,6 +7,7 @@ const screenBtn = document.getElementById('screenBtn');
 const cameraBtn = document.getElementById('cameraBtn');
 const followMouseBtn = document.getElementById('followMouseBtn');
 const emptyUploadBtn = document.getElementById('emptyUploadBtn');
+const emptyUploadHint = document.getElementById('emptyUploadHint');
 const imageInput = document.getElementById('imageInput');
 const previewCanvas = document.getElementById('previewCanvas');
 const serialStatus = document.getElementById('serialStatus');
@@ -226,6 +227,43 @@ function buildCssFilterString() {
     parts.push('invert(1)');
   }
   return parts.length > 0 ? parts.join(' ') : 'none';
+}
+
+function isVideoSourceReady(video) {
+  return !!(
+    video
+    && video.readyState >= video.HAVE_CURRENT_DATA
+    && video.videoWidth > 0
+    && video.videoHeight > 0
+  );
+}
+
+function createLiveVideoElement() {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.setAttribute('aria-hidden', 'true');
+  video.style.position = 'fixed';
+  video.style.left = '-9999px';
+  video.style.top = '0';
+  video.style.width = '1px';
+  video.style.height = '1px';
+  video.style.opacity = '0';
+  video.style.pointerEvents = 'none';
+  document.body.appendChild(video);
+  return video;
+}
+
+function tryPlayVideo(video) {
+  if (!video) return;
+  const playPromise = video.play();
+  if (playPromise) {
+    playPromise.catch(() => {
+      // Some browsers report a transient source-wait error before frames arrive.
+      // The capture loop keeps polling and playback is nudged again on metadata events.
+    });
+  }
 }
 
 function applyImageManipulations() {
@@ -507,6 +545,7 @@ function closeSourcePanel() {
 function updateEmptyState() {
   const hasSource = !!(sourceImageBitmap || screenStream);
   emptyUploadBtn.style.display = hasSource ? 'none' : '';
+  emptyUploadHint.style.display = hasSource ? 'none' : '';
 }
 
 screenBtn.addEventListener('click', async () => {
@@ -576,7 +615,7 @@ cameraBtn.addEventListener('click', async () => {
 
 followMouseBtn.addEventListener('click', () => {
   followMouse = !followMouse;
-  followMouseBtn.textContent = followMouse ? 'Mouse: On' : 'Mouse: Off';
+  followMouseBtn.textContent = followMouse ? 'Mouse Mode: On' : 'Mouse Mode: Off';
   followMouseBtn.classList.toggle('toggle-active', followMouse);
   previewCanvas.classList.toggle('hide-cursor', followMouse);
   if (!followMouse) {
@@ -636,6 +675,21 @@ colorsPanel.addEventListener('click', (e) => {
   e.stopPropagation();
 });
 
+function syncAdjustmentControls() {
+  exposureSlider.value = adjustments.exposure;
+  hueSlider.value = adjustments.hue;
+  contrastSlider.value = adjustments.contrast;
+  invertBtn.classList.toggle('toggle-active', adjustments.invert);
+}
+
+function resetAdjustments(applyChanges = true) {
+  adjustments = { invert: false, exposure: 0, hue: 0, contrast: 0 };
+  syncAdjustmentControls();
+  if (applyChanges) {
+    applyImageManipulations();
+  }
+}
+
 function onAdjustmentSliderChange() {
   adjustments.exposure = parseInt(exposureSlider.value, 10);
   adjustments.hue = parseInt(hueSlider.value, 10);
@@ -648,10 +702,7 @@ hueSlider.addEventListener('input', onAdjustmentSliderChange);
 contrastSlider.addEventListener('input', onAdjustmentSliderChange);
 
 document.getElementById('colorsResetBtn').addEventListener('click', () => {
-  exposureSlider.value = 0;
-  hueSlider.value = 0;
-  contrastSlider.value = 0;
-  onAdjustmentSliderChange();
+  resetAdjustments();
 });
 
 // ---- Settings panel ----
@@ -737,7 +788,9 @@ function stopLiveCapture() {
     screenStream = null;
   }
   if (screenVideo) {
+    screenVideo.pause();
     screenVideo.srcObject = null;
+    screenVideo.remove();
     screenVideo = null;
   }
   screenBtn.classList.remove('toggle-active');
@@ -747,9 +800,11 @@ function stopLiveCapture() {
 
 async function startLiveCapture(kind, deviceId) {
   stopLiveCapture();
+  resetAdjustments(false);
 
+  let stream;
   if (kind === 'screen') {
-    screenStream = await navigator.mediaDevices.getDisplayMedia({
+    stream = await navigator.mediaDevices.getDisplayMedia({
       video: { cursor: 'never' },
       audio: false,
     });
@@ -757,11 +812,14 @@ async function startLiveCapture(kind, deviceId) {
     const constraints = deviceId
       ? { video: { deviceId: { exact: deviceId } }, audio: false }
       : { video: { facingMode: 'environment' }, audio: false };
-    screenStream = await navigator.mediaDevices.getUserMedia(constraints);
+    stream = await navigator.mediaDevices.getUserMedia(constraints);
   }
 
+  const videoTrack = stream.getVideoTracks()[0];
+
   // If user stops sharing via browser chrome, clean up
-  screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+  videoTrack.addEventListener('ended', () => {
+    if (screenStream !== stream) return;
     stopLiveCapture();
     if (!sourceImageBitmap) {
       analysisPixels = null;
@@ -770,10 +828,11 @@ async function startLiveCapture(kind, deviceId) {
     }
   });
 
-  screenVideo = document.createElement('video');
-  screenVideo.srcObject = screenStream;
-  screenVideo.muted = true;
-  await screenVideo.play();
+  const video = createLiveVideoElement();
+  video.srcObject = stream;
+
+  screenStream = stream;
+  screenVideo = video;
 
   // Clear any previous static image so live feed takes over
   sourceImageBitmap = null;
@@ -783,19 +842,42 @@ async function startLiveCapture(kind, deviceId) {
   } else {
     cameraBtn.classList.add('toggle-active');
   }
+  renderViewfinder();
+
+  let captureStarted = false;
+
+  const startCaptureLoop = () => {
+    if (captureStarted || screenStream !== stream || screenVideo !== video) return;
+    captureStarted = true;
+    screenAnimFrame = requestAnimationFrame(captureFrame);
+  };
+
+  const nudgePlayback = () => {
+    if (screenStream !== stream || screenVideo !== video) return;
+    tryPlayVideo(video);
+    startCaptureLoop();
+  };
+
+  video.addEventListener('loadedmetadata', nudgePlayback);
+  video.addEventListener('loadeddata', nudgePlayback);
+  video.addEventListener('canplay', nudgePlayback);
+  video.addEventListener('playing', nudgePlayback);
+  videoTrack.addEventListener('unmute', nudgePlayback);
+
+  tryPlayVideo(video);
+  startCaptureLoop();
 
   function captureFrame() {
-    if (!screenStream || !screenVideo) return;
+    if (screenStream !== stream || screenVideo !== video) return;
 
     // Skip frames until the video is actually delivering pixels
-    if (screenVideo.readyState < screenVideo.HAVE_CURRENT_DATA ||
-        screenVideo.videoWidth === 0 || screenVideo.videoHeight === 0) {
+    if (!isVideoSourceReady(video)) {
       screenAnimFrame = requestAnimationFrame(captureFrame);
       return;
     }
 
     analysisCtx.clearRect(0, 0, analysisCanvas.width, analysisCanvas.height);
-    analysisCtx.drawImage(screenVideo, 0, 0, analysisCanvas.width, analysisCanvas.height);
+    analysisCtx.drawImage(video, 0, 0, analysisCanvas.width, analysisCanvas.height);
 
     const imageData = analysisCtx.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
     originalAnalysisPixels = new Uint8ClampedArray(imageData.data);
@@ -821,6 +903,7 @@ async function startLiveCapture(kind, deviceId) {
 
 async function loadImage(file) {
   stopLiveCapture();
+  resetAdjustments(false);
   const bitmap = await createImageBitmap(file);
   sourceImageBitmap = bitmap;
 
