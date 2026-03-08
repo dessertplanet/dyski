@@ -116,6 +116,55 @@ button.toggle-active {
   background: rgba(108, 166, 255, 0.08);
 }
 
+.adjust-overlay {
+  position: absolute;
+  bottom: 0.8rem;
+  left: 0.8rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-end;
+}
+
+.colors-wrapper {
+  position: relative;
+}
+
+.colors-panel {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 0;
+  background: rgba(32, 41, 58, 0.95);
+  border: 1px solid #334055;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  display: none;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 180px;
+}
+
+.colors-panel.colors-panel-open {
+  display: flex;
+}
+
+.color-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.color-control label {
+  font-size: 0.75rem;
+  color: #98a6bb;
+  user-select: none;
+}
+
+.color-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 .slew-overlay {
   position: absolute;
   bottom: 0.8rem;

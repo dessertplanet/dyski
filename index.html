@@ -17,6 +17,26 @@
           <button id="followMouseBtn" type="button">Mouse: Off</button>
         </div>
         <canvas id="previewCanvas" width="512" height="512" aria-label="Uploaded image with viewfinder"></canvas>
+        <div class="adjust-overlay">
+          <button id="invertBtn" type="button">Invert</button>
+          <div class="colors-wrapper">
+            <button id="colorsBtn" type="button">Colors</button>
+            <div id="colorsPanel" class="colors-panel" hidden>
+              <div class="color-control">
+                <label for="exposureSlider">Exposure</label>
+                <input id="exposureSlider" type="range" min="-200" max="200" value="0" />
+              </div>
+              <div class="color-control">
+                <label for="hueSlider">Hue</label>
+                <input id="hueSlider" type="range" min="0" max="360" value="0" />
+              </div>
+              <div class="color-control">
+                <label for="contrastSlider">Contrast</label>
+                <input id="contrastSlider" type="range" min="-100" max="100" value="0" />
+              </div>
+            </div>
+          </div>
+        </div>
         <div class="slew-overlay">
           <label for="slewSlider">Audio1 Slew</label>
           <input id="slewSlider" type="range" min="0" max="255" value="64" />

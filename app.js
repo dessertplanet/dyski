@@ -6,6 +6,12 @@ const imageInput = document.getElementById('imageInput');
 const previewCanvas = document.getElementById('previewCanvas');
 const serialStatus = document.getElementById('serialStatus');
 const slewSlider = document.getElementById('slewSlider');
+const invertBtn = document.getElementById('invertBtn');
+const colorsBtn = document.getElementById('colorsBtn');
+const colorsPanel = document.getElementById('colorsPanel');
+const exposureSlider = document.getElementById('exposureSlider');
+const hueSlider = document.getElementById('hueSlider');
+const contrastSlider = document.getElementById('contrastSlider');
 const previewCtx = previewCanvas.getContext('2d');
 const analysisCanvas = document.createElement('canvas');
 analysisCanvas.width = 256;
@@ -55,6 +61,8 @@ let lastCvSendTime = 0;
 let followMouse = false;
 let mouseOrigin = null;
 let viewSize = VIEW_SIZE;
+let originalAnalysisPixels = null;
+let adjustments = { invert: false, exposure: 0, hue: 0, contrast: 0 };
 
 function isPortOpen() {
   return portIsOpen;
@@ -132,6 +140,108 @@ function median(values) {
 function medianFromHistory(key, fallback) {
   if (rawHistory.length === 0) return fallback;
   return median(rawHistory.map((entry) => entry[key]));
+}
+
+function rgbToHsl(r, g, b) {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [h, s, l];
+}
+
+function hue2rgb(p, q, t) {
+  if (t < 0) t += 1;
+  if (t > 1) t -= 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 1 / 2) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+
+function hslToRgb(h, s, l) {
+  if (s === 0) return [l, l, l];
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [hue2rgb(p, q, h + 1 / 3), hue2rgb(p, q, h), hue2rgb(p, q, h - 1 / 3)];
+}
+
+function hasActiveAdjustments() {
+  return adjustments.invert || adjustments.exposure !== 0 || adjustments.hue !== 0 || adjustments.contrast !== 0;
+}
+
+function applyImageManipulations() {
+  if (!originalAnalysisPixels) return;
+  const src = originalAnalysisPixels;
+  const len = src.length;
+  const dst = new Uint8ClampedArray(len);
+
+  const expFactor = Math.pow(2, adjustments.exposure / 100);
+  const contVal = adjustments.contrast * 2.55;
+  const contFactor = (259 * (contVal + 255)) / (255 * (259 - contVal));
+  const hueShift = adjustments.hue / 360;
+
+  for (let i = 0; i < len; i += 4) {
+    let r = src[i];
+    let g = src[i + 1];
+    let b = src[i + 2];
+
+    // Exposure
+    r *= expFactor;
+    g *= expFactor;
+    b *= expFactor;
+
+    // Contrast
+    r = contFactor * (r - 128) + 128;
+    g = contFactor * (g - 128) + 128;
+    b = contFactor * (b - 128) + 128;
+
+    // Clamp before hue rotation
+    r = clamp(r, 0, 255);
+    g = clamp(g, 0, 255);
+    b = clamp(b, 0, 255);
+
+    // Hue rotation
+    if (hueShift !== 0) {
+      const [h0, s0, l0] = rgbToHsl(r / 255, g / 255, b / 255);
+      let h1 = (h0 + hueShift) % 1;
+      if (h1 < 0) h1 += 1;
+      const [rr, gg, bb] = hslToRgb(h1, s0, l0);
+      r = rr * 255;
+      g = gg * 255;
+      b = bb * 255;
+    }
+
+    // Invert
+    if (adjustments.invert) {
+      r = 255 - r;
+      g = 255 - g;
+      b = 255 - b;
+    }
+
+    dst[i] = Math.round(r);
+    dst[i + 1] = Math.round(g);
+    dst[i + 2] = Math.round(b);
+    dst[i + 3] = src[i + 3];
+  }
+
+  const imageData = new ImageData(dst, analysisCanvas.width, analysisCanvas.height);
+  analysisCtx.putImageData(imageData, 0, 0);
+  analysisPixels = dst;
+
+  renderViewfinder();
+
+  if (isPortOpen() && analysisPixels) {
+    const { cv1, cv2, pulses } = analyzeViewport();
+    updateLocalOutputs(cv1, cv2, pulses);
+    sendCvFrame(cv1, cv2);
+  }
 }
 
 function setSerialState(nextState) {
@@ -274,6 +384,7 @@ function updatePreview(file) {
   if (!file) {
     sourceImageBitmap = null;
     analysisPixels = null;
+    originalAnalysisPixels = null;
     renderViewfinder();
     return;
   }
@@ -337,6 +448,41 @@ imageInput.addEventListener('change', (event) => {
   updatePreview(file);
 });
 
+// ---- Image adjustment controls ----
+invertBtn.addEventListener('click', () => {
+  adjustments.invert = !adjustments.invert;
+  invertBtn.classList.toggle('toggle-active', adjustments.invert);
+  applyImageManipulations();
+});
+
+colorsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = colorsPanel.classList.toggle('colors-panel-open');
+  colorsBtn.classList.toggle('toggle-active', isOpen);
+});
+
+colorsPanel.addEventListener('click', (e) => {
+  e.stopPropagation();
+});
+
+document.addEventListener('click', () => {
+  if (colorsPanel.classList.contains('colors-panel-open')) {
+    colorsPanel.classList.remove('colors-panel-open');
+    colorsBtn.classList.remove('toggle-active');
+  }
+});
+
+function onAdjustmentSliderChange() {
+  adjustments.exposure = parseInt(exposureSlider.value, 10);
+  adjustments.hue = parseInt(hueSlider.value, 10);
+  adjustments.contrast = parseInt(contrastSlider.value, 10);
+  applyImageManipulations();
+}
+
+exposureSlider.addEventListener('input', onAdjustmentSliderChange);
+hueSlider.addEventListener('input', onAdjustmentSliderChange);
+contrastSlider.addEventListener('input', onAdjustmentSliderChange);
+
 // ---- Drag-and-drop image loading ----
 const stage = document.getElementById('stage');
 
@@ -396,8 +542,9 @@ async function loadImage(file) {
   analysisCtx.drawImage(bitmap, 0, 0, analysisCanvas.width, analysisCanvas.height);
 
   const imageData = analysisCtx.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+  originalAnalysisPixels = new Uint8ClampedArray(imageData.data);
   analysisPixels = imageData.data;
-  renderViewfinder();
+  applyImageManipulations();
 }
 
 function renderViewfinder() {
@@ -413,7 +560,12 @@ function renderViewfinder() {
     return;
   }
 
-  previewCtx.drawImage(sourceImageBitmap, 0, 0, previewCanvas.width, previewCanvas.height);
+  if (hasActiveAdjustments()) {
+    previewCtx.imageSmoothingEnabled = true;
+    previewCtx.drawImage(analysisCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
+  } else {
+    previewCtx.drawImage(sourceImageBitmap, 0, 0, previewCanvas.width, previewCanvas.height);
+  }
 
   const { vx, vy } = getViewportOrigin();
 
