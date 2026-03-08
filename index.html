@@ -13,10 +13,19 @@
         <div class="controls controls-overlay">
           <button id="connectBtn" type="button">Connect</button>
           <button id="disconnectBtn" type="button">Disconnect</button>
-          <button id="uploadBtn" type="button">Choose image</button>
+          <div class="source-wrapper">
+            <button id="sourceBtn" type="button">Source <span class="chevron">&#x25BE;</span></button>
+            <div id="sourcePanel" class="source-panel">
+              <button id="uploadBtn" type="button">Image</button>
+              <button id="screenBtn" type="button">Screen</button>
+              <button id="cameraBtn" type="button">Camera</button>
+              <div id="cameraList" class="camera-list"></div>
+            </div>
+          </div>
           <button id="followMouseBtn" type="button">Mouse: Off</button>
         </div>
-        <canvas id="previewCanvas" width="512" height="512" aria-label="Uploaded image with viewfinder"></canvas>
+        <button id="emptyUploadBtn" class="empty-upload-btn" type="button">Choose image</button>
+        <canvas id="previewCanvas" aria-label="Uploaded image with viewfinder"></canvas>
         <div class="adjust-overlay">
           <button id="invertBtn" type="button">Invert</button>
           <div class="colors-wrapper">
@@ -34,12 +43,28 @@
                 <label for="contrastSlider">Contrast</label>
                 <input id="contrastSlider" type="range" min="-100" max="100" value="0" />
               </div>
+              <button id="colorsResetBtn" type="button">Reset</button>
             </div>
           </div>
         </div>
-        <div class="slew-overlay">
-          <label for="slewSlider">Audio1 Slew</label>
-          <input id="slewSlider" type="range" min="0" max="255" value="64" />
+        <div class="settings-overlay">
+          <div class="settings-wrapper">
+            <button id="settingsBtn" type="button">Settings</button>
+            <div id="settingsPanel" class="settings-panel">
+              <div class="color-control">
+                <label for="slewSlider">Audio1 Slew</label>
+                <input id="slewSlider" type="range" min="0" max="255" value="64" />
+              </div>
+              <div class="color-control">
+                <label for="borderWeightSlider">Border Weight</label>
+                <input id="borderWeightSlider" type="range" min="0" max="30" value="3" step="0.5" />
+              </div>
+              <div class="color-control">
+                <label for="borderColorPicker">Border Color</label>
+                <input id="borderColorPicker" type="color" value="#6ca6ff" />
+              </div>
+            </div>
+          </div>
         </div>
       </section>
 

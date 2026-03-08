@@ -1,11 +1,20 @@
 const connectBtn = document.getElementById('connectBtn');
 const disconnectBtn = document.getElementById('disconnectBtn');
+const sourceBtn = document.getElementById('sourceBtn');
+const sourcePanel = document.getElementById('sourcePanel');
 const uploadBtn = document.getElementById('uploadBtn');
+const screenBtn = document.getElementById('screenBtn');
+const cameraBtn = document.getElementById('cameraBtn');
 const followMouseBtn = document.getElementById('followMouseBtn');
+const emptyUploadBtn = document.getElementById('emptyUploadBtn');
 const imageInput = document.getElementById('imageInput');
 const previewCanvas = document.getElementById('previewCanvas');
 const serialStatus = document.getElementById('serialStatus');
 const slewSlider = document.getElementById('slewSlider');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsPanel = document.getElementById('settingsPanel');
+const borderWeightSlider = document.getElementById('borderWeightSlider');
+const borderColorPicker = document.getElementById('borderColorPicker');
 const invertBtn = document.getElementById('invertBtn');
 const colorsBtn = document.getElementById('colorsBtn');
 const colorsPanel = document.getElementById('colorsPanel');
@@ -17,6 +26,23 @@ const analysisCanvas = document.createElement('canvas');
 analysisCanvas.width = 256;
 analysisCanvas.height = 256;
 const analysisCtx = analysisCanvas.getContext('2d', { willReadFrequently: true });
+
+function resizePreviewCanvas() {
+  const rect = previewCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  if (previewCanvas.width !== w || previewCanvas.height !== h) {
+    previewCanvas.width = w;
+    previewCanvas.height = h;
+  }
+}
+
+resizePreviewCanvas();
+window.addEventListener('resize', () => {
+  resizePreviewCanvas();
+  renderViewfinder();
+});
 
 const FRAME_KNOB_0 = 'K'.charCodeAt(0);
 const FRAME_KNOB_1 = 'N'.charCodeAt(0);
@@ -63,6 +89,12 @@ let mouseOrigin = null;
 let viewSize = VIEW_SIZE;
 let originalAnalysisPixels = null;
 let adjustments = { invert: false, exposure: 0, hue: 0, contrast: 0 };
+let viewfinderBorderWeight = 3;
+let viewfinderBorderColor = '#6ca6ff';
+let screenStream = null;
+let screenVideo = null;
+let screenAnimFrame = null;
+let liveSource = null; // 'screen' | 'camera' | null
 
 function isPortOpen() {
   return portIsOpen;
@@ -176,8 +208,44 @@ function hasActiveAdjustments() {
   return adjustments.invert || adjustments.exposure !== 0 || adjustments.hue !== 0 || adjustments.contrast !== 0;
 }
 
+function buildCssFilterString() {
+  const parts = [];
+  if (adjustments.exposure !== 0) {
+    parts.push(`brightness(${Math.pow(2, adjustments.exposure / 100)})`);
+  }
+  if (adjustments.contrast !== 0) {
+    // Map -100..100 to CSS contrast 0..2 (0=grey, 1=normal, 2=double)
+    const contVal = adjustments.contrast * 2.55;
+    const factor = (259 * (contVal + 255)) / (255 * (259 - contVal));
+    parts.push(`contrast(${factor})`);
+  }
+  if (adjustments.hue !== 0) {
+    parts.push(`hue-rotate(${adjustments.hue}deg)`);
+  }
+  if (adjustments.invert) {
+    parts.push('invert(1)');
+  }
+  return parts.length > 0 ? parts.join(' ') : 'none';
+}
+
 function applyImageManipulations() {
   if (!originalAnalysisPixels) return;
+
+  if (!hasActiveAdjustments()) {
+    // No adjustments — restore original pixels and let renderViewfinder use the full-res bitmap
+    const imageData = new ImageData(new Uint8ClampedArray(originalAnalysisPixels), analysisCanvas.width, analysisCanvas.height);
+    analysisCtx.putImageData(imageData, 0, 0);
+    analysisPixels = imageData.data;
+    renderViewfinder();
+
+    if (isPortOpen() && analysisPixels) {
+      const { cv1, cv2, pulses } = analyzeViewport();
+      updateLocalOutputs(cv1, cv2, pulses);
+      sendCvFrame(cv1, cv2);
+    }
+    return;
+  }
+
   const src = originalAnalysisPixels;
   const len = src.length;
   const dst = new Uint8ClampedArray(len);
@@ -381,6 +449,7 @@ async function disconnectSerial() {
 }
 
 function updatePreview(file) {
+  stopLiveCapture();
   if (!file) {
     sourceImageBitmap = null;
     analysisPixels = null;
@@ -401,7 +470,109 @@ function openImagePickerAndUpload() {
 
 connectBtn.addEventListener('click', connectSerial);
 disconnectBtn.addEventListener('click', disconnectSerial);
-uploadBtn.addEventListener('click', openImagePickerAndUpload);
+uploadBtn.addEventListener('click', () => {
+  closeSourcePanel();
+  openImagePickerAndUpload();
+});
+emptyUploadBtn.addEventListener('click', openImagePickerAndUpload);
+
+sourceBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  sourcePanel.classList.toggle('source-panel-open');
+});
+
+sourcePanel.addEventListener('click', (e) => {
+  e.stopPropagation();
+});
+
+document.addEventListener('click', () => {
+  closeSourcePanel();
+  if (colorsPanel.classList.contains('colors-panel-open')) {
+    colorsPanel.classList.remove('colors-panel-open');
+    colorsBtn.classList.remove('toggle-active');
+  }
+  if (settingsPanel.classList.contains('settings-panel-open')) {
+    settingsPanel.classList.remove('settings-panel-open');
+    settingsBtn.classList.remove('toggle-active');
+  }
+});
+
+function closeSourcePanel() {
+  sourcePanel.classList.remove('source-panel-open');
+  const cameraList = document.getElementById('cameraList');
+  cameraList.classList.remove('camera-list-open');
+  cameraList.innerHTML = '';
+}
+
+function updateEmptyState() {
+  const hasSource = !!(sourceImageBitmap || screenStream);
+  emptyUploadBtn.style.display = hasSource ? 'none' : '';
+}
+
+screenBtn.addEventListener('click', async () => {
+  closeSourcePanel();
+  if (liveSource === 'screen') {
+    stopLiveCapture();
+    return;
+  }
+  try {
+    await startLiveCapture('screen');
+  } catch (error) {
+    if (error.name !== 'NotAllowedError') {
+      window.alert(`Screen capture failed: ${error.message}`);
+    }
+  }
+});
+
+cameraBtn.addEventListener('click', async () => {
+  if (liveSource === 'camera') {
+    closeSourcePanel();
+    stopLiveCapture();
+    return;
+  }
+  try {
+    // Request temporary permission to enumerate labeled devices
+    const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    tempStream.getTracks().forEach((t) => t.stop());
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter((d) => d.kind === 'videoinput');
+    const cameraList = document.getElementById('cameraList');
+    cameraList.innerHTML = '';
+
+    if (videoDevices.length <= 1) {
+      // Only one camera — start immediately
+      closeSourcePanel();
+      cameraList.classList.remove('camera-list-open');
+      await startLiveCapture('camera');
+    } else {
+      // Multiple cameras — show picker
+      videoDevices.forEach((device, i) => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = device.label || `Camera ${i + 1}`;
+        btn.addEventListener('click', async () => {
+          closeSourcePanel();
+          cameraList.classList.remove('camera-list-open');
+          try {
+            await startLiveCapture('camera', device.deviceId);
+          } catch (err) {
+            if (err.name !== 'NotAllowedError') {
+              window.alert(`Camera failed: ${err.message}`);
+            }
+          }
+        });
+        cameraList.appendChild(btn);
+      });
+      cameraList.classList.add('camera-list-open');
+    }
+  } catch (error) {
+    closeSourcePanel();
+    if (error.name !== 'NotAllowedError') {
+      window.alert(`Camera failed: ${error.message}`);
+    }
+  }
+});
 
 followMouseBtn.addEventListener('click', () => {
   followMouse = !followMouse;
@@ -415,7 +586,7 @@ followMouseBtn.addEventListener('click', () => {
 });
 
 previewCanvas.addEventListener('mousemove', (event) => {
-  if (!followMouse || !sourceImageBitmap) return;
+  if (!followMouse || (!sourceImageBitmap && !screenStream)) return;
   const rect = previewCanvas.getBoundingClientRect();
   const canvasX = ((event.clientX - rect.left) / rect.width) * analysisCanvas.width;
   const canvasY = ((event.clientY - rect.top) / rect.height) * analysisCanvas.height;
@@ -465,13 +636,6 @@ colorsPanel.addEventListener('click', (e) => {
   e.stopPropagation();
 });
 
-document.addEventListener('click', () => {
-  if (colorsPanel.classList.contains('colors-panel-open')) {
-    colorsPanel.classList.remove('colors-panel-open');
-    colorsBtn.classList.remove('toggle-active');
-  }
-});
-
 function onAdjustmentSliderChange() {
   adjustments.exposure = parseInt(exposureSlider.value, 10);
   adjustments.hue = parseInt(hueSlider.value, 10);
@@ -482,6 +646,34 @@ function onAdjustmentSliderChange() {
 exposureSlider.addEventListener('input', onAdjustmentSliderChange);
 hueSlider.addEventListener('input', onAdjustmentSliderChange);
 contrastSlider.addEventListener('input', onAdjustmentSliderChange);
+
+document.getElementById('colorsResetBtn').addEventListener('click', () => {
+  exposureSlider.value = 0;
+  hueSlider.value = 0;
+  contrastSlider.value = 0;
+  onAdjustmentSliderChange();
+});
+
+// ---- Settings panel ----
+settingsBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const isOpen = settingsPanel.classList.toggle('settings-panel-open');
+  settingsBtn.classList.toggle('toggle-active', isOpen);
+});
+
+settingsPanel.addEventListener('click', (e) => {
+  e.stopPropagation();
+});
+
+borderWeightSlider.addEventListener('input', () => {
+  viewfinderBorderWeight = parseFloat(borderWeightSlider.value);
+  renderViewfinder();
+});
+
+borderColorPicker.addEventListener('input', () => {
+  viewfinderBorderColor = borderColorPicker.value;
+  renderViewfinder();
+});
 
 // ---- Drag-and-drop image loading ----
 const stage = document.getElementById('stage');
@@ -511,6 +703,7 @@ stage.addEventListener('drop', (event) => {
 });
 
 window.addEventListener('beforeunload', () => {
+  stopLiveCapture();
   if (!port) return;
   if (isPortOpen()) {
     portIsOpen = false;
@@ -534,7 +727,100 @@ if ('serial' in navigator) {
   });
 }
 
+function stopLiveCapture() {
+  if (screenAnimFrame) {
+    cancelAnimationFrame(screenAnimFrame);
+    screenAnimFrame = null;
+  }
+  if (screenStream) {
+    screenStream.getTracks().forEach((t) => t.stop());
+    screenStream = null;
+  }
+  if (screenVideo) {
+    screenVideo.srcObject = null;
+    screenVideo = null;
+  }
+  screenBtn.classList.remove('toggle-active');
+  cameraBtn.classList.remove('toggle-active');
+  liveSource = null;
+}
+
+async function startLiveCapture(kind, deviceId) {
+  stopLiveCapture();
+
+  if (kind === 'screen') {
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'never' },
+      audio: false,
+    });
+  } else {
+    const constraints = deviceId
+      ? { video: { deviceId: { exact: deviceId } }, audio: false }
+      : { video: { facingMode: 'environment' }, audio: false };
+    screenStream = await navigator.mediaDevices.getUserMedia(constraints);
+  }
+
+  // If user stops sharing via browser chrome, clean up
+  screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+    stopLiveCapture();
+    if (!sourceImageBitmap) {
+      analysisPixels = null;
+      originalAnalysisPixels = null;
+      renderViewfinder();
+    }
+  });
+
+  screenVideo = document.createElement('video');
+  screenVideo.srcObject = screenStream;
+  screenVideo.muted = true;
+  await screenVideo.play();
+
+  // Clear any previous static image so live feed takes over
+  sourceImageBitmap = null;
+  liveSource = kind;
+  if (kind === 'screen') {
+    screenBtn.classList.add('toggle-active');
+  } else {
+    cameraBtn.classList.add('toggle-active');
+  }
+
+  function captureFrame() {
+    if (!screenStream || !screenVideo) return;
+
+    // Skip frames until the video is actually delivering pixels
+    if (screenVideo.readyState < screenVideo.HAVE_CURRENT_DATA ||
+        screenVideo.videoWidth === 0 || screenVideo.videoHeight === 0) {
+      screenAnimFrame = requestAnimationFrame(captureFrame);
+      return;
+    }
+
+    analysisCtx.clearRect(0, 0, analysisCanvas.width, analysisCanvas.height);
+    analysisCtx.drawImage(screenVideo, 0, 0, analysisCanvas.width, analysisCanvas.height);
+
+    const imageData = analysisCtx.getImageData(0, 0, analysisCanvas.width, analysisCanvas.height);
+    originalAnalysisPixels = new Uint8ClampedArray(imageData.data);
+
+    if (hasActiveAdjustments()) {
+      applyImageManipulations();
+    } else {
+      analysisPixels = imageData.data;
+      renderViewfinder();
+
+      if (isPortOpen() && analysisPixels) {
+        const { cv1, cv2, pulses } = analyzeViewport();
+        updateLocalOutputs(cv1, cv2, pulses);
+        sendCvFrame(cv1, cv2);
+      }
+    }
+
+    screenAnimFrame = requestAnimationFrame(captureFrame);
+  }
+
+  captureFrame();
+}
+
 async function loadImage(file) {
+  stopLiveCapture();
   const bitmap = await createImageBitmap(file);
   sourceImageBitmap = bitmap;
 
@@ -550,20 +836,30 @@ async function loadImage(file) {
 function renderViewfinder() {
   previewCtx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
 
-  if (!sourceImageBitmap) {
+  if (!sourceImageBitmap && !screenStream) {
     previewCtx.fillStyle = '#0b0e14';
     previewCtx.fillRect(0, 0, previewCanvas.width, previewCanvas.height);
-    previewCtx.fillStyle = '#98a6bb';
-    previewCtx.font = '20px system-ui';
-    previewCtx.textAlign = 'center';
-    previewCtx.fillText('Upload an image to start', previewCanvas.width / 2, previewCanvas.height / 2);
+    updateEmptyState();
     return;
   }
 
-  if (hasActiveAdjustments()) {
-    previewCtx.imageSmoothingEnabled = true;
-    previewCtx.drawImage(analysisCanvas, 0, 0, previewCanvas.width, previewCanvas.height);
-  } else {
+  updateEmptyState();
+
+  if (hasActiveAdjustments() && sourceImageBitmap) {
+    previewCtx.save();
+    previewCtx.filter = buildCssFilterString();
+    previewCtx.drawImage(sourceImageBitmap, 0, 0, previewCanvas.width, previewCanvas.height);
+    previewCtx.restore();
+  } else if (screenStream && screenVideo && screenVideo.readyState >= screenVideo.HAVE_CURRENT_DATA) {
+    if (hasActiveAdjustments()) {
+      previewCtx.save();
+      previewCtx.filter = buildCssFilterString();
+      previewCtx.drawImage(screenVideo, 0, 0, previewCanvas.width, previewCanvas.height);
+      previewCtx.restore();
+    } else {
+      previewCtx.drawImage(screenVideo, 0, 0, previewCanvas.width, previewCanvas.height);
+    }
+  } else if (sourceImageBitmap) {
     previewCtx.drawImage(sourceImageBitmap, 0, 0, previewCanvas.width, previewCanvas.height);
   }
 
@@ -600,9 +896,11 @@ function renderViewfinder() {
     }
   }
 
-  previewCtx.strokeStyle = '#6ca6ff';
-  previewCtx.lineWidth = 3;
-  previewCtx.strokeRect(vx * scaleX, vy * scaleY, viewSize * scaleX, viewSize * scaleY);
+  if (viewfinderBorderWeight > 0) {
+    previewCtx.strokeStyle = viewfinderBorderColor;
+    previewCtx.lineWidth = viewfinderBorderWeight;
+    previewCtx.strokeRect(vx * scaleX, vy * scaleY, viewSize * scaleX, viewSize * scaleY);
+  }
 
   if (effectiveRes >= viewSize) {
     previewCtx.fillStyle = 'rgba(108, 166, 255, 0.12)';
